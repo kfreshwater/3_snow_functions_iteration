@@ -14,127 +14,6 @@ library(readxl)
 ```
 
 
-# Simple web scraping
-
-R can read html using either rvest, xml, or xml2 packages. Here we are going to navigate to the Center for Snow and Avalance Studies  [Website](https://snowstudies.org/archived-data/) and read a table in. This table contains links to data we want to programatically download for three sites. We don't know much about these sites, but they contain incredibly rich snow, temperature, and precip data. 
-
-
-## Reading an html 
-
-### Extract CSV links from webpage
-
-```{r}
-site_url <- 'https://snowstudies.org/archived-data/'
-
-#Read the web url
-webpage <- read_html(site_url)
-
-#See if we can extract tables and get the data that way
-tables <- webpage %>%
-  html_nodes('table') %>%
-  magrittr::extract2(3) %>%
-  html_table(fill = TRUE)
-#That didn't work, so let's try a different approach
-
-#Extract only weblinks and then the URLs!
-links <- webpage %>%
-  html_nodes('a') %>%
-  .[grepl('24hr',.)] %>%
-  html_attr('href')
-```
-
-## Data Download
-
-### Download data in a 'for' loop
-
-```{r}
-
-#Grab only the name of the file by splitting out on forward slashes
-splits <- str_split_fixed(links,'/',8)
-
-#Keep only the 8th column
-dataset <- splits[,8] 
-
-#generate a file list for where the data goes
-file_names <- paste0('data/',dataset)
-
-for(i in 1:3){
-  download.file(links[i],destfile=file_names[i])
-}
-
-downloaded <- file.exists(file_names)
-
-evaluate <- !all(downloaded)
-
-```
-
-
-### Download data in a map
-
-```{r}
-
-#Map version of the same for loop (downloading 3 files)
-if(evaluate == T){
-  map2(links[1:3],file_names[1:3],download.file)
-}else{print('data already downloaded')}
-
-```
-
-## Data read-in 
-
-### Read in just the snow data as a loop
-
-```{r}
-#Pattern matching to only keep certain files
-snow_files <- file_names %>%
-  .[!grepl('SG_24',.)] %>%
-  .[!grepl('PTSP',.)]
-
-empty_data <- list()
-
-snow_data <- for(i in 1:length(snow_files)){
- empty_data[[i]] <- read_csv(snow_files[i]) %>%
- select(Year,DOY,Sno_Height_M)
- }
-
-snow_data_full <- do.call('rbind',empty_data)
-
-summary(snow_data_full)
-```
-
-
-### Read in the data as a map function
-
-```{r, warning=F}
-
-our_snow_reader <- function(file){
-  name = str_split_fixed(file,'/',2)[,2] %>%
-    gsub('_24hr.csv','',.)
-  df <- read_csv(file) %>%
-    select(Year,DOY,Sno_Height_M) %>%
-    mutate(site = name)
-}
-
-snow_data_full <- map_dfr(snow_files,our_snow_reader)
-
-summary(snow_data_full)
-```
-
-
-### Plot snow data
-
-```{r,warning=F}
-snow_yearly <- snow_data_full %>%
-  group_by(Year,site) %>%
-  summarize(mean_height = mean(Sno_Height_M,na.rm=T))
-
-ggplot(snow_yearly,aes(x=Year,y=mean_height,color=site)) + 
-  geom_point() +
-  ggthemes::theme_few() + 
-  ggthemes::scale_color_few()
-```
-
-(DELETE ALL ABV WHEN FINISHED)
 # Assignment:
 
 1. Extract the meteorological data URLs. Here we want you to use the `rvest` package to get the URLs for the `SASP forcing` and `SBSP_forcing` meteorological datasets.
@@ -213,7 +92,7 @@ summary(forcing_data_full)
 
 5. Make a line plot of mean temp by year by site (using the `air temp [K]` variable). Is there anything suspicious in the plot? Adjust your filtering if needed.
 
-```{r,warning=F}
+```{r,warning=F,message=F}
 forcing_yearly <- forcing_data_full %>%
   group_by(year,site) %>%
   summarize(yearly_air_temp_k = mean(air.temp..K.,na.rm=T))
@@ -227,7 +106,7 @@ ggplot(forcing_yearly,aes(x=year,y=yearly_air_temp_k,color=site)) +
 ```
 
 For both the SASP and SBSP sites, here is a sharp increase in air temperature between the years 2003 and 2005; this is at odds with the stable trendline from 2005 onwards. The following graph filters the years before 2005:
-```{r,warning=F}
+```{r,warning=F,message=F}
 forcing_yearly_filter <- forcing_yearly %>%
   filter(year >= 2005)
 
@@ -277,13 +156,71 @@ for (year_air in 2005:2010) {
 
 From 2005 to 2010, at no point in the year is the Senator Beck Study Plot warmer than the Snow Angel Study Plot.
 
-Bonus: Make a plot of average daily precipitation by day of year (averaged across all available years). 
-```{r}
+**Bonus:** Make a plot of average daily precipitation by day of year (averaged across all available years). 
+```{r,message=F,warning=F}
+forcing_precip_filter <- forcing_data_full %>%
+  group_by(year,month,day,site) %>%
+  filter(site=='SBB_SASP') %>%
+  unite("date", year, month, day, sep = "-", remove = FALSE) %>%
+  mutate(date = ymd(date)) %>% 
+  mutate(doy = yday(date)) %>%
+  summarize(precip= precip..WMO.corrected..kg.m.2.s.1.,
+            doy=doy)
 
+forcing_precip_filter_avg <- forcing_precip_filter %>%
+  group_by(doy,site) %>%
+  summarize(doy_precip = mean(precip))
+  
+  ggplot(forcing_precip_filter_avg, aes(x=doy,y=doy_precip)) +
+    geom_line() +
+    ggthemes::theme_few() +
+    ggthemes::scale_color_few() +
+    ylab('Average Corrected WMO precipitation (kg/m^2*s)') +
+    xlab('Day of the Year')
+    
 ```
 
 
-Bonus #2: Use a function and for loop to create yearly plots of precipitation by day of year.
-```{r}
 
+These graphs show the corrected WMO precipitation in kg/m&2*s for each day of the year, averaged over the data range 2003-2011. Both SBB_SASP and SBB_SBSP report from the same gauge.
+
+
+**Bonus #2:** Use a function and for loop to create yearly plots of precipitation by day of year.
+```{r,message=F,warning=F}
+precip_plot <- function(filter_year_function_precip,year_precip){
+  
+  forcing_precip_function_year<- forcing_data_full %>%
+  group_by(year,month,day,site) %>%
+  filter(site=='SBB_SASP',
+         year==year_precip) %>%
+  unite("date", year, month, day, sep = "-", remove = FALSE) %>%
+  mutate(date = ymd(date)) %>% 
+  mutate(doy = yday(date)) %>%
+  summarize(precip= precip..WMO.corrected..kg.m.2.s.1.,
+            doy=doy)
+
+  forcing_precip_filter_avg_year <- forcing_precip_function_year %>%
+  group_by(doy,site) %>%
+  summarize(doy_precip = mean(precip))
+    
+    str1 = 'Day of the Year ('
+    str2 = year_precip
+    str3 = "Year)"
+    
+    z = ggplot(forcing_precip_filter_avg_year, aes(x=doy,y=doy_precip)) +
+    geom_line() +
+    ggthemes::theme_few() +
+    ggthemes::scale_color_few() +
+    ylab('Average Corrected WMO precipitation (kg/m^2*s)') +
+    xlab(paste(str1,str2,str3))
+    
+    print(z)
+ }
+
+for (year_precip in 2003:2011) {
+  precip_plot(filter_year_function_precip,year_precip)
+}
 ```
+  
+
+These graphs show the corrected WMO precipitation in kg/m&2*s for each year in the range 2003-2011 Both SBB_SASP and SBB_SBSP are report from the same gauge.
